@@ -69,7 +69,7 @@ class SongLibrary:
         genre_by_song = {}
 
         self.model.eval()
-        for filepath in song_paths:
+        for  in song_paths:
             genre = os.path.basename(os.path.dirname(filepath))
             try:
                 chunks = self.audio_to_chunks(filepath)
@@ -114,8 +114,15 @@ class SongLibrary:
         return self.most_similar_to_embedding(embedding, k=k)
 
     def filepath_for_title(self, title):
-        safe_title = os.path.basename(title)
-        for filepath in self.song_files:
-            if os.path.basename(filepath) == safe_title:
-                return filepath
-        return None
+    safe_title = os.path.basename(title)
+    for stored_path, genre in zip(self.song_files, self.song_genres):
+        if os.path.basename(stored_path) != safe_title:
+            continue
+        if os.path.exists(stored_path):
+            return stored_path
+        dataset_dir = os.getenv("GTZAN_DATASET_DIR")
+        if dataset_dir:
+            candidate = os.path.join(dataset_dir, genre, safe_title)
+            if os.path.exists(candidate):
+                return candidate
+    return None
