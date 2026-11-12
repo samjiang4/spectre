@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
+import SimilarityMap from './SimilarityMap';
+import GenreExplainer from './GenreExplainer';
 
 const demoMatches = [
   { title: 'blues.00055.wav', genre: 'blues' },
@@ -16,26 +18,40 @@ const demoMatches = [
 ];
 
 const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-const almostDoneProgress = 94;
+// Leave room for the response; the API does not report progress.
+const progressCap = 94;
 
-function downloadUrlFor(songTitle) {
+function songDownloadUrl(songTitle) {
   return `${apiBaseUrl}/songs/${encodeURIComponent(songTitle)}`;
 }
 
-function buildDemoMatches(genre, fileName) {
+function getDemoMatches(genre, fileName) {
   const seed = fileName.length + genre.length;
   const rankedSongs = demoMatches
     .map((song, index) => {
       const genreBoost = song.genre === genre ? 0.18 : 0;
-      const movement = ((seed + index * 17) % 24) / 100;
+      const scoreOffset = ((seed + index * 17) % 24) / 100;
       return {
         ...song,
-        similarity: Math.min(0.99, 0.68 + genreBoost + movement),
+        similarity: Math.min(0.99, 0.68 + genreBoost + scoreOffset),
       };
     })
     .sort((a, b) => b.similarity - a.similarity);
 
   return rankedSongs.slice(0, 5);
+}
+
+function MusicDecorations() {
+  return (
+    <div className="music-decorations" aria-hidden="true">
+      <span className="music-note note-one">♪</span>
+      <span className="music-note note-two">♫</span>
+      <span className="music-note note-three">♩</span>
+      <span className="music-note note-four">♬</span>
+      <span className="music-note note-five">♪</span>
+      <span className="music-note note-six">♫</span>
+    </div>
+  );
 }
 
 function App() {
@@ -46,6 +62,7 @@ function App() {
   const [scanProgress, setScanProgress] = useState(0);
   const [result, setResult] = useState(null);
   const [errorMessage, setErrorMessage] = useState('');
+  const [selectedMatch, setSelectedMatch] = useState(0);
 
   const leaderboard = useMemo(() => {
     if (result?.similarSongs?.length) {
@@ -53,10 +70,10 @@ function App() {
     }
 
     if (!result || !track) {
-      return buildDemoMatches('blues', 'demo');
+      return getDemoMatches('blues', 'demo');
     }
 
-    return buildDemoMatches(result.genre, track.name);
+    return getDemoMatches(result.genre, track.name);
   }, [result, track]);
 
   useEffect(() => {
@@ -65,25 +82,25 @@ function App() {
     };
   }, []);
 
-  function startProgressRing() {
+  function startProgress() {
     setScanProgress(3);
     window.clearInterval(progressTimerRef.current);
 
     progressTimerRef.current = window.setInterval(() => {
-      setScanProgress((currentProgress) => {
-        const remainingProgress = almostDoneProgress - currentProgress;
-        const nextStep = Math.max(1.5, remainingProgress * 0.08);
-        return Math.min(almostDoneProgress, currentProgress + nextStep);
+      setScanProgress((progress) => {
+        const remaining = progressCap - progress;
+        const step = Math.max(1.5, remaining * 0.08);
+        return Math.min(progressCap, progress + step);
       });
     }, 180);
   }
 
-  function finishProgressRing() {
+  function finishProgress() {
     window.clearInterval(progressTimerRef.current);
     setScanProgress(100);
   }
 
-  async function askModelToClassify(file) {
+  async function classifyAudio(file) {
     const formData = new FormData();
     formData.append('file', file);
 
@@ -110,12 +127,13 @@ function App() {
     const audioUrl = URL.createObjectURL(file);
     setTrack({ name: file.name, size: file.size, url: audioUrl });
     setResult(null);
+    setSelectedMatch(0);
     setErrorMessage('');
     setIsScanning(true);
-    startProgressRing();
+    startProgress();
 
     try {
-      const prediction = await askModelToClassify(file);
+      const prediction = await classifyAudio(file);
       setResult(prediction);
     } catch (error) {
       setErrorMessage(
@@ -123,7 +141,7 @@ function App() {
           'Could not reach the Python model backend. Start it and try the upload again.',
       );
     } finally {
-      finishProgressRing();
+      finishProgress();
       setIsScanning(false);
     }
   }
@@ -135,6 +153,7 @@ function App() {
   return (
     <main className="app-shell">
       <section className="scanner-panel" aria-label="Music genre scanner">
+        <MusicDecorations />
         <header className="topbar">
           <div>
             <p className="eyebrow">CNN classifier</p>
@@ -222,21 +241,29 @@ function App() {
       </section>
 
       <aside className="leaderboard-panel" aria-label="Similar song leaderboard">
+        <MusicDecorations />
         <div className="leaderboard-header">
           <p className="eyebrow">Top matches</p>
           <h2>Similar songs</h2>
         </div>
 
+        <GenreExplainer result={result} />
+
+        <details className="similarity-details">
+          <summary>How is similarity calculated?<span className="details-chevron" aria-hidden="true">⌄</span></summary>
+          <SimilarityMap songs={leaderboard} selectedIndex={selectedMatch} onSelect={setSelectedMatch} isDemo={!result} />
+        </details>
+        <div className="rank-list-heading"><span>NEAREST NEIGHBORS</span><span>{result ? 'By cosine score' : 'Sample matches'}</span></div>
         <div className="rank-list">
           {leaderboard.map((song, index) => (
-            <article className="rank-card" key={song.title}>
-              <div className="rank-number">{index + 1}</div>
+            <article className={`rank-card ${index === selectedMatch ? 'active-match' : ''}`} key={song.title}>
+              <button type="button" className="rank-number" aria-label={`Visualize ${song.title}`} aria-pressed={index === selectedMatch} onClick={() => setSelectedMatch(index)}>{index + 1}</button>
               <div>
                 <h3>{song.title}</h3>
                 <p>{song.genre}</p>
               </div>
-              <strong>{Math.round(song.similarity * 100)}%</strong>
-              <a className="download-link" href={downloadUrlFor(song.title)} download>
+              <strong title="Cosine similarity">{song.similarity.toFixed(3)}</strong>
+              <a className="download-link" href={songDownloadUrl(song.title)} download>
                 Download
               </a>
             </article>
